@@ -1,0 +1,37 @@
+# 1. Secrets and Configuration
+.env
+.env.local
+
+# 2. Virtual Environments
+venv/
+env/
+.conda/
+
+# 3. Data Science and ML
+# Ignore raw data and saved model weights
+*.csv
+*.tsv
+*.xlsx
+*.pkl
+*.joblib
+*.h5
+
+
+# 4. Python and Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+
+# 5. Testing (Pytest)
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 6. IDE and OS
+# Hide local PyCharm settings
+.idea/
+.vscode/
+# Windows and macOS system files
+Thumbs.db
+.DS_Store
