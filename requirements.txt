@@ -1,0 +1,26 @@
+# --- ML & Data Science ---
+pandas
+numpy
+scikit-learn
+joblib
+
+# --- API & Backend ---
+fastapi
+uvicorn[standard]
+pydantic
+
+# --- Database ---
+sqlalchemy
+alembic
+psycopg2-binary
+
+# --- Environment & Config ---
+python-dotenv
+
+# --- Frontend ---
+streamlit
+
+# --- Testing & Code Quality ---
+pytest
+pytest-cov
+ruff
