@@ -8,20 +8,22 @@ env/
 .conda/
 
 # 3. Data Science and ML
-# Ignore raw data and saved model weights
 *.csv
 *.tsv
 *.xlsx
+*.parquet
 *.pkl
 *.joblib
 *.h5
-
+.ipynb_checkpoints/
+src/ml_model/data/
 
 # 4. Python and Cache
 __pycache__/
 *.py[cod]
 *$py.class
 .mypy_cache/
+.ruff_cache/
 
 # 5. Testing (Pytest)
 .pytest_cache/
@@ -29,9 +31,7 @@ __pycache__/
 htmlcov/
 
 # 6. IDE and OS
-# Hide local PyCharm settings
 .idea/
 .vscode/
-# Windows and macOS system files
 Thumbs.db
 .DS_Store
