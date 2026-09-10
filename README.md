@@ -30,27 +30,35 @@ Unlike a standard analytical script, this repository implements a production-rea
 ## Project Structure
 
 ```text
-credit_scoring_project/
-├── ml_model/               # Machine Learning pipeline & artifacts
-│   ├── train.py            # Model training & feature engineering script
-│   ├── service.py          # Inference class for loading model & scoring
-│   └── rf_model.pkl        # Serialized Random Forest model artifact
-├── api/                    # FastAPI web service
-│   ├── main.py             # Application entrypoint & route handlers
-│   └── schemas.py          # Pydantic data contracts (request/response validation)
-├── db/                     # Relational database layer
-│   ├── database.py         # SQLAlchemy engine setup & session management
-│   ├── models.py           # ORM schemas (PostgreSQL tables)
-│   └── crud.py             # Persistence queries (create, read application records)
-├── frontend/               # User interface layer
-│   └── app.py              # Interactive Streamlit dashboard
-├── tests/                  # Automated test suite
-│   ├── test_api.py         # REST API endpoint tests
-│   └── test_ml.py          # Predictive sanity & probability bounds tests
-├── .env                    # Environment variables (DB credentials, API keys)
-├── .gitignore              # Ignored files (artifacts, envs, local caches)
-├── requirements.txt        # Production & development dependencies
-└── README.md               # Project documentation
+credit-risk-service/
+├── frontend/                     # User interface layer
+│   └── app.py                    # Interactive Streamlit dashboard
+├── notebooks/                    # Research, EDA, and prototyping
+│   └── 01_data_preparation.ipynb # Data cleaning, filtering, and initial pipeline
+├── src/                          # Application source code (Python package)
+│   ├── api/                      # FastAPI web service layer
+│   │   ├── main.py               # Application entrypoint & route handlers
+│   │   └── schemas.py            # Pydantic data contracts (request/response validation)
+│   ├── db/                       # Relational database layer
+│   │   ├── crud.py               # Persistence queries (create, read application records)
+│   │   ├── database.py           # SQLAlchemy engine setup & session management
+│   │   └── models.py             # ORM schemas (PostgreSQL tables)
+│   └── ml_model/                 # Machine Learning pipeline & artifacts
+│       ├── data/                 # Local data storage (excluded from git)
+│       │   ├── interim/          # Intermediate transformed subsets
+│       │   ├── processed/        # Final training datasets (parquet/csv)
+│       │   └── raw/              # Immutable raw source data
+│       ├── rf_model.pkl          # Serialized Random Forest model artifact
+│       ├── service.py            # Inference class for loading model & scoring
+│       └── train.py              # Model training & feature engineering script
+├── tests/                        # Automated test suite
+│   ├── test_api.py               # REST API endpoint tests
+│   └── test_ml.py                # Predictive sanity & probability bounds tests
+├── .env                          # Local environment variables (DB credentials, secrets)
+├── .gitignore                    # Git ignore rules (caches, data, venv, secrets)
+├── pyproject.toml                # Project metadata, dependencies, Ruff & Pytest configs
+├── README.md                     # Project overview and run documentation
+└── requirements.txt              # Pinned production & development dependencies
 ```
 
 ## Quick Start (Local Development)
