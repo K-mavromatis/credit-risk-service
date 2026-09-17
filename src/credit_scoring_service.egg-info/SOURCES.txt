@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/credit_scoring_service.egg-info/PKG-INFO
+src/credit_scoring_service.egg-info/SOURCES.txt
+src/credit_scoring_service.egg-info/dependency_links.txt
+src/credit_scoring_service.egg-info/requires.txt
+src/credit_scoring_service.egg-info/top_level.txt
