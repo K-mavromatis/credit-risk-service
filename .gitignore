@@ -35,3 +35,7 @@ htmlcov/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# 7. Local ML testing artifacts
+src/ml_model/generate_dummy_pipeline.py
+src/ml_model/scoring_pipeline.pkl
