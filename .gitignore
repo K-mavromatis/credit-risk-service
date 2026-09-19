@@ -1,5 +1,6 @@
 # 1. Secrets and Configuration
 .env
+.env.*
 .env.local
 
 # 2. Virtual Environments
@@ -19,9 +20,13 @@ env/
 src/ml_model/data/
 
 # 4. Python and Cache
-__pycache__/
+pycache/
 *.py[cod]
 *$py.class
+*.egg-info/
+build/
+dist/
+*.egg
 .mypy_cache/
 .ruff_cache/
 
@@ -35,7 +40,3 @@ htmlcov/
 .vscode/
 Thumbs.db
 .DS_Store
-
-# 7. Local ML testing artifacts
-src/ml_model/generate_dummy_pipeline.py
-src/ml_model/scoring_pipeline.pkl
