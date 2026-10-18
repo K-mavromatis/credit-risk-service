@@ -28,6 +28,7 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "ruff>=0.1.0",
+    "mypy>=1.8.0",
     "pre-commit>=3.4.0",
 ]
 
@@ -47,7 +48,12 @@ ignore = []
 # Pytest settings
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/*" = ["E501"]
+
+# Type checking (run: python -m mypy src/ml_model/streaming scripts)
+[tool.mypy]
+explicit_package_bases = true
+ignore_missing_imports = true  # pandas/sklearn/joblib ship no stubs
