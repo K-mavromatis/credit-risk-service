@@ -8,7 +8,6 @@ joblib
 fastapi
 uvicorn[standard]
 pydantic
-pydantic-settings
 
 # --- Database ---
 sqlalchemy

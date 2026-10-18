@@ -12,11 +12,12 @@ root ``.env`` file (or the real environment), so no credentials live in code.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from pathlib import Path
 
-from pydantic import Field, PostgresDsn
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field, PostgresDsn
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -24,15 +25,14 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # src/db/database.py -> parents[2] is the repository root (where .env lives).
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
+# Real environment variables take precedence over values in .env.
+load_dotenv(PROJECT_ROOT / ".env")
 
-class DatabaseSettings(BaseSettings):
-    """Database configuration loaded from environment variables / ``.env``."""
 
-    model_config = SettingsConfigDict(
-        env_file=PROJECT_ROOT / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",  # other keys in .env (API, model paths...) are fine
-    )
+class DatabaseSettings(BaseModel):
+    """Validated database configuration (Pydantic v2)."""
+
+    model_config = ConfigDict(frozen=True)
 
     # repr=False keeps the password out of logs and tracebacks.
     database_url: PostgresDsn = Field(repr=False)
@@ -40,8 +40,19 @@ class DatabaseSettings(BaseSettings):
     db_pool_size: int = Field(default=5, ge=1)
     db_max_overflow: int = Field(default=10, ge=0)
 
+    @classmethod
+    def from_env(cls) -> DatabaseSettings:
+        """Build settings from environment variables; unset ones use defaults."""
+        raw: dict[str, str | None] = {
+            "database_url": os.getenv("DATABASE_URL"),
+            "db_echo": os.getenv("DB_ECHO"),
+            "db_pool_size": os.getenv("DB_POOL_SIZE"),
+            "db_max_overflow": os.getenv("DB_MAX_OVERFLOW"),
+        }
+        return cls.model_validate({k: v for k, v in raw.items() if v is not None})
 
-settings: DatabaseSettings = DatabaseSettings()
+
+settings: DatabaseSettings = DatabaseSettings.from_env()
 
 # The engine manages the connection pool. It does not connect until first use.
 engine: Engine = create_engine(
