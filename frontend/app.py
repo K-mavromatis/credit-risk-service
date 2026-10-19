@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
+import pandas as pd
 import streamlit as st
 
 PAGE_TITLE: Final[str] = "Credit Risk Scoring"
@@ -10,6 +12,13 @@ FORM_KEY: Final[str] = "loan_application_form"
 
 NumericValue: TypeAlias = float | int | None
 FeatureValue: TypeAlias = float | int | str | None
+HistoryCell: TypeAlias = float | int | str | None
+
+# --- Navigation ----------------------------------------------------------------
+PAGE_SCORING: Final[str] = "New Application"
+PAGE_HISTORY: Final[str] = "Scoring History"
+PAGES: Final[tuple[str, ...]] = (PAGE_SCORING, PAGE_HISTORY)
+NAV_KEY: Final[str] = "nav_page"
 
 # --- Feature contract: mirrors NUMERIC/CATEGORICAL_FEATURES in notebook 02 ---
 NUMERIC_FEATURES: Final[tuple[str, ...]] = (
@@ -70,6 +79,23 @@ CATEGORICAL_OPTIONS: Final[dict[str, tuple[str, ...]]] = {
     "home_ownership": HOME_OWNERSHIP_OPTIONS,
     "verification_status": VERIFICATION_STATUS_OPTIONS,
     "purpose": PURPOSE_OPTIONS,
+}
+
+# --- Scoring history -------------------------------------------------------------
+# Same default as crud.get_recent_applications(), so the page shape won't change
+# when real rows arrive.
+HISTORY_LIMIT: Final[int] = 10
+# Column -> pandas dtype. Names are a subset of CreditApplication columns
+# (src/db/models.py), so a DB query result drops in without renaming.
+HISTORY_SCHEMA: Final[dict[str, str]] = {
+    "created_at": "datetime64[ns, UTC]",
+    "id": "int64",
+    "loan_amnt": "float64",
+    "term": "string",
+    "purpose": "string",
+    "annual_inc": "float64",
+    "fico_range_low": "int64",
+    "default_probability": "float64",  # NaN = not scored yet (NULL in the DB)
 }
 
 
@@ -154,18 +180,95 @@ def validate_inputs(payload: dict[str, FeatureValue]) -> ValidationResult:
     return result
 
 
-# --- UI rendering ---------------------------------------------------------------
-def escape_markdown_dollars(text: str) -> str:
-    """Stop Streamlit from rendering text between two '$' signs as LaTeX."""
-    return text.replace("$", r"\$")
-
-
 def format_category(value: str) -> str:
     """Turn a raw category code into a readable label.
 
     Example: 'debt_consolidation' -> 'Debt consolidation'.
     """
     return value.replace("_", " ").capitalize()
+
+
+def empty_history_frame() -> pd.DataFrame:
+    """Return an empty DataFrame with the history schema (columns and dtypes)."""
+    return pd.DataFrame(
+        {name: pd.Series(dtype=dtype) for name, dtype in HISTORY_SCHEMA.items()}
+    )
+
+
+def make_dummy_history() -> pd.DataFrame:
+    """Return synthetic scoring records shaped like the future DB query result.
+
+    All values are invented (no real applicants) and fixed, so the page looks
+    the same on every run. Rows are ordered newest first, like the DB query.
+    """
+    records: dict[str, list[HistoryCell]] = {
+        "created_at": [
+            "2026-10-12 09:14",
+            "2026-10-12 11:02",
+            "2026-10-13 15:47",
+            "2026-10-14 10:30",
+            "2026-10-15 13:05",
+            "2026-10-16 08:51",
+            "2026-10-16 17:22",
+            "2026-10-17 12:40",
+        ],
+        "id": [1, 2, 3, 4, 5, 6, 7, 8],
+        "loan_amnt": [12_000, 25_000, 5_000, 35_000, 8_500, 15_000, 20_000, 3_000],
+        "term": [
+            "36 months",
+            "60 months",
+            "36 months",
+            "60 months",
+            "36 months",
+            "36 months",
+            "60 months",
+            "36 months",
+        ],
+        "purpose": [
+            "debt_consolidation",
+            "home_improvement",
+            "credit_card",
+            "small_business",
+            "car",
+            "debt_consolidation",
+            "medical",
+            "vacation",
+        ],
+        "annual_inc": [65_000, 92_000, 48_000, 110_000, 54_000, 71_000, 39_000, 83_000],
+        "fico_range_low": [710, 685, 740, 660, 700, 725, 645, 770],
+        # The newest applicant has no score yet: the DB allows NULL here.
+        "default_probability": [0.08, 0.19, 0.05, 0.34, 0.12, 0.07, 0.41, None],
+    }
+    frame = pd.DataFrame(records)
+    frame["created_at"] = pd.to_datetime(frame["created_at"], utc=True)
+    frame = frame.astype(HISTORY_SCHEMA)[list(HISTORY_SCHEMA)]
+    return frame.sort_values(["created_at", "id"], ascending=False, ignore_index=True)
+
+
+def load_scoring_history(limit: int = HISTORY_LIMIT) -> pd.DataFrame:
+    """Return the ``limit`` most recent scored applications, newest first.
+
+    This is the only place the history page gets data from. Today it returns
+    dummy rows; when the API exists, only this body changes (a call to the
+    endpoint backed by ``crud.get_recent_applications``), not the page.
+
+    Raises:
+        ValueError: if ``limit`` is not a positive integer.
+    """
+    if limit < 1:
+        raise ValueError(f"limit must be a positive integer, got {limit}")
+    return make_dummy_history().head(limit)
+
+
+def to_display_frame(history: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of the history with human-readable category labels."""
+    return history.assign(purpose=history["purpose"].map(format_category))
+
+
+# --- UI rendering ---------------------------------------------------------------
+def escape_markdown_dollars(text: str) -> str:
+    """Stop Streamlit from rendering text between two '$' signs as LaTeX."""
+    return text.replace("$", r"\$")
 
 
 def render_header() -> None:
@@ -304,9 +407,60 @@ def render_payload(payload: dict[str, FeatureValue]) -> None:
     st.json(payload, expanded=True)
 
 
-def main() -> None:
-    """Entry point for the Streamlit app."""
-    st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+def render_sidebar() -> str:
+    """Render the navigation sidebar and return the name of the selected page."""
+    with st.sidebar:
+        st.header("Navigation")
+        selected: str | None = st.radio(
+            "Section", options=PAGES, key=NAV_KEY, label_visibility="collapsed"
+        )
+        st.divider()
+        st.caption("Credit Risk ML service · Sprint 2")
+    return selected if selected is not None else PAGE_SCORING
+
+
+def render_history_page() -> None:
+    """Render the scoring history table (dummy data until the API exists)."""
+    st.title(PAGE_HISTORY)
+    st.caption(f"The {HISTORY_LIMIT} most recent applications, newest first.")
+    st.info(
+        "Demo data: this table is filled with synthetic records. "
+        "Real applications from the database will appear once the API is connected."
+    )
+
+    history: pd.DataFrame = load_scoring_history()
+    if history.empty:
+        st.info("No applications yet.")
+        return
+
+    st.dataframe(
+        to_display_frame(history),
+        hide_index=True,
+        column_config={
+            "created_at": st.column_config.DatetimeColumn(
+                "Received (UTC)", format="YYYY-MM-DD HH:mm"
+            ),
+            "id": st.column_config.NumberColumn("ID", format="%d"),
+            "loan_amnt": st.column_config.NumberColumn("Loan amount", format="dollar"),
+            "term": st.column_config.TextColumn("Term"),
+            "purpose": st.column_config.TextColumn("Purpose"),
+            "annual_inc": st.column_config.NumberColumn(
+                "Annual income", format="dollar"
+            ),
+            "fico_range_low": st.column_config.NumberColumn("FICO", format="%d"),
+            "default_probability": st.column_config.ProgressColumn(
+                "P(default)",
+                help="Predicted probability of default. Empty = not scored yet.",
+                format="percent",
+                min_value=0.0,
+                max_value=1.0,
+            ),
+        },
+    )
+
+
+def render_scoring_page() -> None:
+    """Render the loan application form, then validate and preview the payload."""
     render_header()
 
     with st.form(key=FORM_KEY):
@@ -331,6 +485,18 @@ def main() -> None:
 
     if validation.is_valid:
         render_payload(payload)
+
+
+def main() -> None:
+    """Entry point: configure the page, draw the sidebar, render the chosen page."""
+    st.set_page_config(page_title=PAGE_TITLE, layout="wide")
+
+    page_renderers: dict[str, Callable[[], None]] = {
+        PAGE_SCORING: render_scoring_page,
+        PAGE_HISTORY: render_history_page,
+    }
+    selected_page: str = render_sidebar()
+    page_renderers[selected_page]()
 
 
 if __name__ == "__main__":
