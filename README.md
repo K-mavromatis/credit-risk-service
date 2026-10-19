@@ -122,4 +122,4 @@ uvicorn api.main:app --reload
 **[Liza Zinkina]** — *Frontend & UI Integration*
 * **Focus:** Interface Design, Streamlit, API Integration
 * **GitHub:** [@Liza0316](https://github.com/Liza0316)
-* **LinkedIn:** [Liza Zinkina](https://www.linkedin.com/in/%D0%BB%D0%B8%D0%B7%D0%B0-%D0%B7%D0%B8%D0%BD%D0%BA%D0%B8%D0%BD%D0%B0-30796a336/)
+* **LinkedIn:** [Liza Zinkina](https://www.linkedin.com/in/%D0%BB%D0%B8%D0%B7%D0%B0-%D0%B7%D0%B8%D0%BD%D0%BA%D0%B8%D0%BD%D0%B0-30796a336/)
