@@ -1,0 +1,46 @@
+# Keep the build context small and secrets out of the image.
+
+# --- Secrets: inject at runtime (--env-file / compose), never bake in ---
+.env
+.env.*
+
+# --- VCS / IDE ---
+.git
+.gitignore
+.idea
+.vscode
+
+# --- Raw training data (1.8 GB) - not needed for inference ---
+src/ml_model/data/
+**/*.csv
+**/*.tsv
+**/*.parquet
+**/*.xlsx
+
+# --- Python caches / build metadata ---
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+env/
+
+# --- Not part of the API service ---
+frontend/
+notebooks/
+tests/
+scripts/
+*.md
+.pre-commit-config.yaml
+
+# --- Docker files themselves ---
+Dockerfile
+.dockerignore
+
+# NOTE: *.pkl is deliberately NOT ignored: src/ml_model/scoring_pipeline.pkl
+# must be inside the image for the API to start.

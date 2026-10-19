@@ -21,7 +21,7 @@ env/
 src/ml_model/data/
 
 # 4. Python and Cache
-pycache/
+__pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
