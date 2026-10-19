@@ -16,6 +16,7 @@ Run from the project root, with the API already running:
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -69,6 +70,19 @@ FICO_TRAINING_MIN: Final[int] = 625
 FICO_TRAINING_MAX: Final[int] = 845
 # Missingness is informative for these, so the form may send None (see notebook 02).
 NULLABLE_FEATURES: Final[frozenset[str]] = frozenset({"emp_length", "mort_acc"})
+# Inclusive (min, max) bounds of the other numeric features; None = no upper
+# bound. Mirrors the Field constraints of ApplicationBase (src/api/schemas.py),
+# so a value the API would reject with 422 is blocked before the request.
+# loan_amnt and annual_inc have their own, more specific rules.
+NUMERIC_BOUNDS: Final[dict[str, tuple[float, float | None]]] = {
+    "dti": (0.0, None),
+    "emp_length": (0, 10),
+    "fico_range_low": (300, 850),
+    "open_acc": (0, None),
+    "pub_rec": (0, None),
+    "revol_util": (0.0, None),
+    "mort_acc": (0, None),
+}
 
 # --- Scoring API -------------------------------------------------------------------
 # Read from the environment (or .env), so the same code works locally and in Docker.
@@ -81,6 +95,11 @@ PREDICT_URL: Final[str] = f"{API_BASE_URL}/predict"
 # (connect, read) timeouts in seconds. Without a timeout, requests can wait
 # forever and the "Calculate Risk" spinner would never stop.
 REQUEST_TIMEOUT: Final[tuple[float, float]] = (3.05, 30.0)
+# Shown when the backend cannot be reached at all (connection refused, DNS
+# failure, timeout). Wording fixed by Sprint 4, Card 5.
+SERVICE_UNAVAILABLE_MESSAGE: Final[str] = (
+    "Сервис скоринга временно недоступен. Попробуйте позже."
+)
 # Probability of default at or above which an application is flagged as high
 # risk. Placeholder until a tuned threshold is chosen in notebook 03 (changing
 # it needs evaluation metrics, see CONTRIBUTING.md). Override: RISK_THRESHOLD.
@@ -179,42 +198,107 @@ def build_payload(
     return {name: merged[name] for name in FEATURE_ORDER}
 
 
-def validate_inputs(payload: dict[str, FeatureValue]) -> ValidationResult:
-    """Apply business rules to the payload. Messages are plain text (no Markdown)."""
-    result = ValidationResult()
-
-    # 1. Required fields must be present.
+def _check_required(payload: Mapping[str, FeatureValue], errors: list[str]) -> None:
+    """Every feature except NULLABLE_FEATURES must have a value."""
     for name in FEATURE_ORDER:
         if payload.get(name) is None and name not in NULLABLE_FEATURES:
-            result.errors.append(f"`{name}` is required.")
+            errors.append(f"`{name}` is required.")
 
-    # 2. Numeric business rules.
+
+def _check_numbers_are_finite(
+    payload: Mapping[str, FeatureValue], errors: list[str]
+) -> None:
+    """Numeric features must be real, finite numbers (None is handled elsewhere)."""
+    for name in NUMERIC_FEATURES:
+        raw: FeatureValue = payload.get(name)
+        if raw is None:
+            continue
+        value: float | None = _to_float(raw)
+        if value is None or not math.isfinite(value):
+            errors.append(f"`{name}` must be a finite number, got {raw!r}.")
+
+
+def _check_loan_and_income(
+    payload: Mapping[str, FeatureValue], errors: list[str]
+) -> None:
+    """Block zero/negative loan amounts and non-positive incomes."""
     loan_amnt: float | None = _to_float(payload.get("loan_amnt"))
-    if loan_amnt is not None and not MIN_LOAN_AMOUNT <= loan_amnt <= MAX_LOAN_AMOUNT:
-        result.errors.append(
-            f"Loan amount must be between ${MIN_LOAN_AMOUNT:,.0f} "
-            f"and ${MAX_LOAN_AMOUNT:,.0f}."
-        )
+    if loan_amnt is not None and math.isfinite(loan_amnt):
+        if loan_amnt <= 0:
+            errors.append("Loan amount must be greater than $0.")
+        elif not MIN_LOAN_AMOUNT <= loan_amnt <= MAX_LOAN_AMOUNT:
+            errors.append(
+                f"Loan amount must be between ${MIN_LOAN_AMOUNT:,.0f} "
+                f"and ${MAX_LOAN_AMOUNT:,.0f}."
+            )
 
     annual_inc: float | None = _to_float(payload.get("annual_inc"))
-    if annual_inc is not None and annual_inc <= 0:
-        result.errors.append("Annual income must be greater than $0.")
+    if annual_inc is not None and math.isfinite(annual_inc):
+        if annual_inc < 0:
+            errors.append("Annual income cannot be negative.")
+        elif annual_inc == 0:
+            errors.append("Annual income must be greater than $0.")
 
-    # 3. Categorical values must be levels the model was trained on.
+
+def _is_within_bounds(value: float, bounds: tuple[float, float | None]) -> bool:
+    """Return True if ``value`` lies in the inclusive ``(low, high)`` interval."""
+    low, high = bounds
+    return value >= low and (high is None or value <= high)
+
+
+def _check_numeric_bounds(
+    payload: Mapping[str, FeatureValue], errors: list[str]
+) -> None:
+    """The remaining numeric features must stay inside NUMERIC_BOUNDS."""
+    for name, bounds in NUMERIC_BOUNDS.items():
+        value: float | None = _to_float(payload.get(name))
+        if value is None or not math.isfinite(value):
+            continue  # missing / non-finite values are reported by other checks
+        if not _is_within_bounds(value, bounds):
+            low, high = bounds
+            expected: str = f"≥ {low:g}" if high is None else f"{low:g}–{high:g}"
+            errors.append(f"`{name}` must be {expected}, got {value:g}.")
+
+
+def _check_categories(payload: Mapping[str, FeatureValue], errors: list[str]) -> None:
+    """Categorical values must be levels the model was trained on."""
     for name, options in CATEGORICAL_OPTIONS.items():
         value: FeatureValue = payload.get(name)
         if value not in options:
-            result.errors.append(f"`{name}` has an unknown value: {value!r}.")
+            errors.append(f"`{name}` has an unknown value: {value!r}.")
 
-    # 4. Non-blocking warnings: valid input, but outside the training distribution.
+
+def _check_training_range(
+    payload: Mapping[str, FeatureValue], warnings: list[str]
+) -> None:
+    """Warn (non-blocking) about valid values outside the training distribution."""
     fico: float | None = _to_float(payload.get("fico_range_low"))
-    if fico is not None and not FICO_TRAINING_MIN <= fico <= FICO_TRAINING_MAX:
-        result.warnings.append(
+    if (
+        fico is not None
+        and math.isfinite(fico)
+        and _is_within_bounds(fico, NUMERIC_BOUNDS["fico_range_low"])
+        and not FICO_TRAINING_MIN <= fico <= FICO_TRAINING_MAX
+    ):
+        warnings.append(
             f"FICO {fico:.0f} is outside the training range "
             f"({FICO_TRAINING_MIN}–{FICO_TRAINING_MAX}); "
             "the score may be less reliable."
         )
 
+
+def validate_inputs(payload: Mapping[str, FeatureValue]) -> ValidationResult:
+    """Check the payload against the business rules before it is sent to the API.
+
+    Any error blocks the request (the form is "not submitted"); warnings are
+    shown but do not block. Messages are plain text (no Markdown).
+    """
+    result = ValidationResult()
+    _check_required(payload, result.errors)
+    _check_numbers_are_finite(payload, result.errors)
+    _check_loan_and_income(payload, result.errors)
+    _check_numeric_bounds(payload, result.errors)
+    _check_categories(payload, result.errors)
+    _check_training_range(payload, result.warnings)
     return result
 
 
@@ -252,6 +336,44 @@ class ScoringAPIError(Exception):
         """
         super().__init__(message)
         self.details: tuple[str, ...] = tuple(details)
+
+
+class ScoringServiceUnavailableError(ScoringAPIError):
+    """The backend could not be reached: connection refused, DNS error, timeout.
+
+    ``str(error)`` is always SERVICE_UNAVAILABLE_MESSAGE; the technical reason
+    (URL, timeout, how to start the backend) goes to ``details``.
+    """
+
+    def __init__(self, details: Sequence[str] = ()) -> None:
+        """Create the error.
+
+        Args:
+            details: Technical lines for developers, shown collapsed in the UI.
+        """
+        super().__init__(SERVICE_UNAVAILABLE_MESSAGE, details=details)
+
+
+class ScoringResponseError(ScoringAPIError):
+    """The backend answered, but not with a usable score.
+
+    Covers error statuses (``422`` validation, ``500`` model failure, ``503``
+    model or DB down, ...) and ``2xx`` bodies that are not a valid score.
+    The UI shows these as a warning with ``details`` as a bullet list.
+    """
+
+    def __init__(
+        self, message: str, status_code: int, details: Sequence[str] = ()
+    ) -> None:
+        """Create the error.
+
+        Args:
+            message: Short, user-facing description of the failure.
+            status_code: HTTP status code of the response.
+            details: Optional extra lines, e.g. field errors of a 422 response.
+        """
+        super().__init__(message, details=details)
+        self.status_code: int = status_code
 
 
 def parse_risk_threshold(raw: str | None) -> float:
@@ -313,20 +435,25 @@ def _response_detail(response: requests.Response) -> object:
     return body.get("detail") if isinstance(body, dict) else None
 
 
-def error_from_response(response: requests.Response) -> ScoringAPIError:
+def error_from_response(response: requests.Response) -> ScoringResponseError:
     """Build a user-facing error from a non-2xx API response."""
     status_code: int = response.status_code
     detail: object = _response_detail(response)
 
     if status_code == 422:
-        return ScoringAPIError(
+        return ScoringResponseError(
             "The API rejected the application data (HTTP 422).",
+            status_code=status_code,
             details=format_validation_errors(detail),
         )
     if isinstance(detail, str) and detail:
-        return ScoringAPIError(f"Scoring API error (HTTP {status_code}): {detail}")
-    return ScoringAPIError(
-        f"Unexpected response from the scoring API (HTTP {status_code})."
+        return ScoringResponseError(
+            f"Scoring API error (HTTP {status_code}): {detail}",
+            status_code=status_code,
+        )
+    return ScoringResponseError(
+        f"Unexpected response from the scoring API (HTTP {status_code}).",
+        status_code=status_code,
     )
 
 
@@ -337,9 +464,15 @@ def request_score(
 ) -> ScoringResult:
     """Send one application to ``POST /predict`` and return its score.
 
+    Every failure is turned into a ``ScoringAPIError`` subclass, so the UI can
+    show a message instead of crashing.
+
     Raises:
-        ScoringAPIError: if the API is unreachable, too slow, answers with an
-            error status, or returns a body that is not a valid score.
+        ScoringServiceUnavailableError: the backend is unreachable or too slow
+            (``ConnectionError`` / ``Timeout``).
+        ScoringResponseError: the backend answered with an error status (e.g.
+            ``422``, ``500``) or with a body that is not a valid score.
+        ScoringAPIError: any other ``RequestException`` (e.g. an invalid URL).
     """
     try:
         response: requests.Response = requests.post(
@@ -347,17 +480,19 @@ def request_score(
         )
     except requests.exceptions.ConnectionError as exc:
         # Checked before Timeout: ConnectTimeout is both, and "cannot connect"
-        # is the more useful message for it.
-        raise ScoringAPIError(
-            f"Cannot connect to the scoring API at {url}. Is the backend running?",
+        # is the more useful detail for it.
+        raise ScoringServiceUnavailableError(
             details=[
-                "Start it from the project root: uvicorn src.api.main:app --reload"
-            ],
+                f"Cannot connect to the scoring API at {url}.",
+                "Is the backend running? Start it from the project root: "
+                "uvicorn src.api.main:app --reload",
+            ]
         ) from exc
     except requests.exceptions.Timeout as exc:
-        raise ScoringAPIError(
-            f"The scoring API at {url} did not answer within {timeout[1]:.0f} s. "
-            "Please try again."
+        raise ScoringServiceUnavailableError(
+            details=[
+                f"The scoring API at {url} did not answer within {timeout[1]:.0f} s."
+            ]
         ) from exc
     except requests.exceptions.RequestException as exc:
         raise ScoringAPIError(f"The request to the scoring API failed: {exc}") from exc
@@ -368,13 +503,17 @@ def request_score(
     try:
         body: object = response.json()
     except ValueError as exc:
-        raise ScoringAPIError("The scoring API returned a non-JSON response.") from exc
+        raise ScoringResponseError(
+            "The scoring API returned a non-JSON response.",
+            status_code=response.status_code,
+        ) from exc
 
     try:
         return ScoringResult.model_validate(body)
     except ValidationError as exc:
-        raise ScoringAPIError(
+        raise ScoringResponseError(
             "The scoring API response does not contain a valid score.",
+            status_code=response.status_code,
             details=format_validation_errors(exc.errors(include_url=False)),
         ) from exc
 
@@ -468,6 +607,18 @@ def to_display_frame(history: pd.DataFrame) -> pd.DataFrame:
 def escape_markdown_dollars(text: str) -> str:
     """Stop Streamlit from rendering text between two '$' signs as LaTeX."""
     return text.replace("$", r"\$")
+
+
+def format_details_markdown(details: Sequence[str]) -> str:
+    """Render detail lines as a Markdown bullet list ('' if there are none)."""
+    return "\n".join(f"- {escape_markdown_dollars(line)}" for line in details)
+
+
+def format_error_markdown(error: ScoringAPIError) -> str:
+    """Render an API error as its message followed by its details as bullets."""
+    message: str = escape_markdown_dollars(str(error))
+    details: str = format_details_markdown(error.details)
+    return f"{message}\n{details}" if details else message
 
 
 def render_header() -> None:
@@ -596,10 +747,23 @@ def render_validation(result: ValidationResult) -> None:
 
 
 def render_api_error(error: ScoringAPIError) -> None:
-    """Show a scoring API failure as one red box, with details as a bullet list."""
-    lines: list[str] = [escape_markdown_dollars(str(error))]
-    lines.extend(f"- {escape_markdown_dollars(detail)}" for detail in error.details)
-    st.error("\n".join(lines), icon="⚠️")
+    """Show a scoring API failure without crashing the app.
+
+    - backend unreachable / timeout -> red ``st.error`` with the fixed message,
+      technical reason in a collapsed expander;
+    - backend answered with an error (``422``, ``500``, ...) or a bad body ->
+      yellow ``st.warning`` with the status and details as a bullet list;
+    - anything else (e.g. invalid URL) -> red ``st.error`` with the details.
+    """
+    if isinstance(error, ScoringServiceUnavailableError):
+        st.error(SERVICE_UNAVAILABLE_MESSAGE, icon="🔌")
+        if error.details:
+            with st.expander("Technical details"):
+                st.markdown(format_details_markdown(error.details))
+    elif isinstance(error, ScoringResponseError):
+        st.warning(format_error_markdown(error), icon="⚠️")
+    else:
+        st.error(format_error_markdown(error), icon="⚠️")
 
 
 def render_scoring_result(result: ScoringResult, threshold: float) -> None:
@@ -647,7 +811,7 @@ def render_sidebar() -> str:
             "Section", options=PAGES, key=NAV_KEY, label_visibility="collapsed"
         )
         st.divider()
-        st.caption("Credit Risk ML service · Sprint 3")
+        st.caption("Credit Risk ML service · Sprint 4")
         st.caption(f"API: {API_BASE_URL}")
     return selected if selected is not None else PAGE_SCORING
 
