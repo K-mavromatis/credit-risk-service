@@ -1,0 +1,7 @@
+# Runtime deps of frontend/app.py only (the API image uses ../requirements.txt).
+# Keep streamlit in sync with the pin in the root requirements.txt.
+streamlit==1.63.0
+requests
+pandas
+pydantic
+python-dotenv

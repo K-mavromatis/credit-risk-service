@@ -1,0 +1,7 @@
+# Build context for the Streamlit image is ./frontend
+.env
+.env.*
+**/__pycache__/
+**/*.py[cod]
+Dockerfile
+.dockerignore
