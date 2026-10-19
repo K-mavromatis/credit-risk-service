@@ -90,6 +90,7 @@ def total_ram_gib() -> float | None:
 
 
 def describe_machine() -> str:
+    """Return a one-line hardware/OS summary for the benchmark report."""
     ram = total_ram_gib()
     ram_text = f"{ram:.1f} GiB RAM" if ram is not None else "RAM: fill in manually"
     return (
@@ -100,6 +101,14 @@ def describe_machine() -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Benchmark the streaming approaches and print a Markdown table.
+
+    Args:
+        argv: Command-line arguments; ``None`` reads ``sys.argv``.
+
+    Returns:
+        Process exit code: 0 on success, 2 if the input file is missing.
+    """
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--path", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)

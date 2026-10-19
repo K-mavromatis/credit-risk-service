@@ -42,7 +42,14 @@ class DatabaseSettings(BaseModel):
 
     @classmethod
     def from_env(cls) -> DatabaseSettings:
-        """Build settings from environment variables; unset ones use defaults."""
+        """Build settings from environment variables; unset ones use defaults.
+
+        Returns:
+            A frozen, validated ``DatabaseSettings`` instance.
+
+        Raises:
+            pydantic.ValidationError: If ``DATABASE_URL`` is missing or invalid.
+        """
         raw: dict[str, str | None] = {
             "database_url": os.getenv("DATABASE_URL"),
             "db_echo": os.getenv("DB_ECHO"),
@@ -94,6 +101,9 @@ def get_db() -> Generator[Session, None, None]:
         @router.post("/score")
         def score(..., db: Session = Depends(get_db)) -> ...:
             ...
+
+    Yields:
+        A new ``Session``, closed when the request finishes.
     """
     db: Session = SessionLocal()
     try:
@@ -103,7 +113,14 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def check_connection() -> bool:
-    """Return True if PostgreSQL answers a trivial ``SELECT 1`` query."""
+    """Check that PostgreSQL answers a trivial ``SELECT 1`` query.
+
+    Returns:
+        True if the database returned 1, otherwise False.
+
+    Raises:
+        sqlalchemy.exc.OperationalError: If the database cannot be reached.
+    """
     with engine.connect() as connection:
         result: int = connection.execute(text("SELECT 1")).scalar_one()
         return result == 1

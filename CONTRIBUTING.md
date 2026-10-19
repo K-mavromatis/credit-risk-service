@@ -105,7 +105,7 @@ Please do not push directly to `main`.
 
 **Linting and formatting**
 
-Ruff is configured in `pyproject.toml` (line length 88, target `py310`, rules `E`, `F`, and `I`; notebooks are exempt from `E501`). The pre-commit hooks run `ruff --fix` and `ruff-format` on every commit. You can also run them manually:
+Ruff is the single linter and formatter, configured in `pyproject.toml`: line length 88, target `py310`, Black-compatible formatting, and the rule sets `E`/`W` (PEP 8), `F` and `C90` (Flake8), `I` (isort), `N`, `UP`, `B`, `C4`, `SIM`, `BLE`, `ANN` (type annotations), `D` (docstrings) and `RUF`. Tests, Alembic migrations and notebooks have relaxed docstring/annotation rules (see `per-file-ignores`). The Ruff version is pinned to the same release in `requirements.txt`, `pyproject.toml` and `.pre-commit-config.yaml`; bump all three together. The pre-commit hooks run `ruff-check --fix` and `ruff-format` on every commit. You can also run them manually:
 
 ```bash
 ruff check .                  # lint (add --fix to apply safe fixes)
@@ -113,6 +113,8 @@ ruff format .                 # format
 pre-commit run --all-files    # everything the hooks run
 mypy src/ml_model/streaming scripts   # the only paths currently type-checked; extend as new code lands
 ```
+
+**Docstrings** follow the Google convention (enforced by `D` with `convention = "google"`): a one-line imperative summary ending with a period, then `Args:`, `Returns:` / `Yields:` and `Raises:` sections for public service functions. Pydantic fields and ORM columns are documented with `Field(description=...)` and `mapped_column(comment=...)` rather than in the class docstring. For FastAPI endpoints, put a `\f` line before the sections so Swagger shows only the summary.
 
 Fix warnings rather than silencing them. If a `# noqa` or `# type: ignore` is unavoidable, use a specific rule code and add a short reason.
 

@@ -92,6 +92,14 @@ def write_jsonl(rows: Iterator[dict[str, Any]], output: Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Build the JSON Lines sample from the raw LendingClub CSV.
+
+    Args:
+        argv: Command-line arguments; ``None`` reads ``sys.argv``.
+
+    Returns:
+        Process exit code: 0 on success, 1 on bad data, 2 if the source is missing.
+    """
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)

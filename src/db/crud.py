@@ -69,6 +69,16 @@ def create_application(db: Session, data: ApplicationCreate) -> CreditApplicatio
     The function commits its own transaction: one call = one stored application.
     On any database error the session is rolled back (so it stays usable) and
     the error is re-raised for the API layer to turn into an HTTP response.
+
+    Args:
+        db: Open SQLAlchemy session, usually injected by ``get_db``.
+        data: Validated features plus the model score to persist.
+
+    Returns:
+        The stored ``CreditApplication`` with ``id`` and ``created_at`` filled in.
+
+    Raises:
+        SQLAlchemyError: If the INSERT or COMMIT fails (after rollback).
     """
     application = CreditApplication(**data.model_dump())
     db.add(application)
@@ -88,6 +98,16 @@ def get_recent_applications(db: Session, limit: int = 10) -> list[CreditApplicat
 
     ``id`` breaks ties: rows inserted in the same transaction share the same
     ``now()`` timestamp, and the order of the dashboard must be stable.
+
+    Args:
+        db: Open SQLAlchemy session.
+        limit: Maximum number of rows to return; must be at least 1.
+
+    Returns:
+        Up to ``limit`` applications ordered by ``created_at`` descending.
+
+    Raises:
+        ValueError: If ``limit`` is less than 1.
     """
     if limit < 1:
         raise ValueError(f"limit must be a positive integer, got {limit}")
