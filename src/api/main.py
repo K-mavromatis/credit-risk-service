@@ -137,7 +137,7 @@ app = FastAPI(
     title="Credit Scoring API",
     version=API_VERSION,
     description=(
-        "Scores a loan application with the Random Forest scoring pipeline, "
+        "Scores a loan application with the LightGBM scoring pipeline, "
         "stores the application and its probability of default in PostgreSQL, "
         "and returns the stored record."
     ),
