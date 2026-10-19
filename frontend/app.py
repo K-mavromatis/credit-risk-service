@@ -1,11 +1,32 @@
+"""Streamlit UI of the credit scoring service.
+
+Pages:
+    New Application -- loan form. On submit the payload is validated locally,
+                       sent to ``POST /predict`` and the returned score is shown.
+    Scoring History -- the most recent applications (synthetic data for now).
+
+The UI talks to the backend only over HTTP (CONTRIBUTING.md): it never imports
+from ``src/``. The API address comes from ``API_BASE_URL`` (environment or
+``.env``), default ``http://localhost:8000``.
+
+Run from the project root, with the API already running:
+    uvicorn src.api.main:app --reload
+    streamlit run frontend/app.py
+"""
+
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Final, TypeAlias
 
 import pandas as pd
+import requests
 import streamlit as st
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 PAGE_TITLE: Final[str] = "Credit Risk Scoring"
 FORM_KEY: Final[str] = "loan_application_form"
@@ -48,6 +69,22 @@ FICO_TRAINING_MIN: Final[int] = 625
 FICO_TRAINING_MAX: Final[int] = 845
 # Missingness is informative for these, so the form may send None (see notebook 02).
 NULLABLE_FEATURES: Final[frozenset[str]] = frozenset({"emp_length", "mort_acc"})
+
+# --- Scoring API -------------------------------------------------------------------
+# Read from the environment (or .env), so the same code works locally and in Docker.
+load_dotenv()
+DEFAULT_API_BASE_URL: Final[str] = "http://localhost:8000"
+API_BASE_URL: Final[str] = (os.getenv("API_BASE_URL") or DEFAULT_API_BASE_URL).rstrip(
+    "/"
+)
+PREDICT_URL: Final[str] = f"{API_BASE_URL}/predict"
+# (connect, read) timeouts in seconds. Without a timeout, requests can wait
+# forever and the "Calculate Risk" spinner would never stop.
+REQUEST_TIMEOUT: Final[tuple[float, float]] = (3.05, 30.0)
+# Probability of default at or above which an application is flagged as high
+# risk. Placeholder until a tuned threshold is chosen in notebook 03 (changing
+# it needs evaluation metrics, see CONTRIBUTING.md). Override: RISK_THRESHOLD.
+DEFAULT_RISK_THRESHOLD: Final[float] = 0.5
 
 # Category levels exactly as they appear in the training data (see notebook 02).
 # Ordered by frequency, so the default (index 0) is the most common level.
@@ -178,6 +215,161 @@ def validate_inputs(payload: dict[str, FeatureValue]) -> ValidationResult:
         )
 
     return result
+
+
+# --- Scoring API client (no Streamlit calls; unit-testable) -----------------------
+class ScoringResult(BaseModel):
+    """The part of the API's ``ApplicationResponse`` that the UI displays.
+
+    Defined here instead of imported from ``src.api.schemas``, because the
+    frontend talks to the backend only over HTTP. The echoed feature fields of
+    the response are ignored.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    id: int = Field(description="Primary key of the stored application")
+    default_probability: float = Field(
+        ge=0, le=1, description="Predicted probability of default, in [0, 1]"
+    )
+    created_at: datetime = Field(description="When the application was stored")
+
+
+class ScoringAPIError(Exception):
+    """The scoring API could not return a usable score.
+
+    ``str(error)`` is a short message for the user; ``details`` holds extra
+    lines, such as the field errors of a ``422`` response.
+    """
+
+    def __init__(self, message: str, details: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.details: tuple[str, ...] = tuple(details)
+
+
+def parse_risk_threshold(raw: str | None) -> float:
+    """Parse the ``RISK_THRESHOLD`` setting. ``None`` or blank gives the default.
+
+    Raises:
+        ValueError: if the value is not a number strictly between 0 and 1.
+    """
+    if raw is None or not raw.strip():
+        return DEFAULT_RISK_THRESHOLD
+    try:
+        value: float = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"RISK_THRESHOLD must be a number, got {raw!r}.") from exc
+    if not 0.0 < value < 1.0:  # also rejects NaN
+        raise ValueError(f"RISK_THRESHOLD must be between 0 and 1, got {value}.")
+    return value
+
+
+RISK_THRESHOLD: Final[float] = parse_risk_threshold(os.getenv("RISK_THRESHOLD"))
+
+
+def is_high_risk(default_probability: float, threshold: float = RISK_THRESHOLD) -> bool:
+    """Return True if the application should be flagged as high default risk."""
+    return default_probability >= threshold
+
+
+def format_validation_errors(detail: object) -> list[str]:
+    """Turn FastAPI's ``422`` ``detail`` into readable lines.
+
+    Example: ``[{"loc": ["body", "loan_amnt"], "msg": "Input should be ..."}]``
+    becomes ``["loan_amnt: Input should be ..."]``.
+    """
+    if not isinstance(detail, list):
+        return [str(detail)] if detail else []
+
+    lines: list[str] = []
+    for item in detail:
+        if not isinstance(item, dict):
+            lines.append(str(item))
+            continue
+        loc: object = item.get("loc", [])
+        parts: list[str] = (
+            [str(part) for part in loc if part != "body"]
+            if isinstance(loc, (list, tuple))  # JSON gives a list, Pydantic a tuple
+            else []
+        )
+        message: str = str(item.get("msg", "invalid value"))
+        lines.append(f"{'.'.join(parts)}: {message}" if parts else message)
+    return lines
+
+
+def _response_detail(response: requests.Response) -> object:
+    """Return the ``detail`` field of an error response, or None if there is none."""
+    try:
+        body: object = response.json()
+    except ValueError:  # requests.JSONDecodeError subclasses ValueError
+        return None
+    return body.get("detail") if isinstance(body, dict) else None
+
+
+def error_from_response(response: requests.Response) -> ScoringAPIError:
+    """Build a user-facing error from a non-2xx API response."""
+    status_code: int = response.status_code
+    detail: object = _response_detail(response)
+
+    if status_code == 422:
+        return ScoringAPIError(
+            "The API rejected the application data (HTTP 422).",
+            details=format_validation_errors(detail),
+        )
+    if isinstance(detail, str) and detail:
+        return ScoringAPIError(f"Scoring API error (HTTP {status_code}): {detail}")
+    return ScoringAPIError(
+        f"Unexpected response from the scoring API (HTTP {status_code})."
+    )
+
+
+def request_score(
+    payload: Mapping[str, FeatureValue],
+    url: str = PREDICT_URL,
+    timeout: tuple[float, float] = REQUEST_TIMEOUT,
+) -> ScoringResult:
+    """Send one application to ``POST /predict`` and return its score.
+
+    Raises:
+        ScoringAPIError: if the API is unreachable, too slow, answers with an
+            error status, or returns a body that is not a valid score.
+    """
+    try:
+        response: requests.Response = requests.post(
+            url, json=dict(payload), timeout=timeout
+        )
+    except requests.exceptions.ConnectionError as exc:
+        # Checked before Timeout: ConnectTimeout is both, and "cannot connect"
+        # is the more useful message for it.
+        raise ScoringAPIError(
+            f"Cannot connect to the scoring API at {url}. Is the backend running?",
+            details=[
+                "Start it from the project root: uvicorn src.api.main:app --reload"
+            ],
+        ) from exc
+    except requests.exceptions.Timeout as exc:
+        raise ScoringAPIError(
+            f"The scoring API at {url} did not answer within {timeout[1]:.0f} s. "
+            "Please try again."
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        raise ScoringAPIError(f"The request to the scoring API failed: {exc}") from exc
+
+    if not response.ok:
+        raise error_from_response(response)
+
+    try:
+        body: object = response.json()
+    except ValueError as exc:
+        raise ScoringAPIError("The scoring API returned a non-JSON response.") from exc
+
+    try:
+        return ScoringResult.model_validate(body)
+    except ValidationError as exc:
+        raise ScoringAPIError(
+            "The scoring API response does not contain a valid score.",
+            details=format_validation_errors(exc.errors(include_url=False)),
+        ) from exc
 
 
 def format_category(value: str) -> str:
@@ -396,15 +588,48 @@ def render_validation(result: ValidationResult) -> None:
         st.warning(escape_markdown_dollars(message))
 
 
-def render_payload(payload: dict[str, FeatureValue]) -> None:
-    """Display the validated payload that will be sent to the scoring API."""
-    st.success(f"Input is valid — {len(payload)} features ready for scoring.")
-    st.subheader("Request payload")
-    st.caption(
-        "Temporary preview. The next card sends this JSON "
-        "to the FastAPI scoring endpoint."
+def render_api_error(error: ScoringAPIError) -> None:
+    """Show a scoring API failure as one red box, with details as a bullet list."""
+    lines: list[str] = [escape_markdown_dollars(str(error))]
+    lines.extend(f"- {escape_markdown_dollars(detail)}" for detail in error.details)
+    st.error("\n".join(lines), icon="⚠️")
+
+
+def render_scoring_result(result: ScoringResult, threshold: float) -> None:
+    """Show the decision banner (green / red) and the key numbers of the score."""
+    probability: float = result.default_probability
+    st.subheader("Scoring result")
+
+    if is_high_risk(probability, threshold):
+        st.error(
+            f"**High default risk.** Probability of default {probability:.1%} "
+            f"is at or above the {threshold:.1%} threshold.",
+            icon="🚫",
+        )
+    else:
+        st.success(
+            f"**Credit approved.** Probability of default {probability:.1%} "
+            f"is below the {threshold:.1%} threshold.",
+            icon="✅",
+        )
+
+    col_probability, col_threshold, col_id = st.columns(3)
+    col_probability.metric(
+        "Probability of default",
+        f"{probability:.1%}",
+        delta=f"{(probability - threshold) * 100:+.1f} pp vs threshold",
+        delta_color="inverse",  # above the threshold = red, below = green
+        help="Percentage points above (+) or below (−) the decision threshold.",
     )
-    st.json(payload, expanded=True)
+    col_threshold.metric("Decision threshold", f"{threshold:.1%}")
+    col_id.metric("Application ID", f"#{result.id}")
+    st.caption(f"Scored and saved at {result.created_at:%Y-%m-%d %H:%M:%S %Z}".strip())
+
+
+def render_payload(payload: Mapping[str, FeatureValue]) -> None:
+    """Show the exact JSON that was sent to the API, collapsed by default."""
+    with st.expander("Request payload sent to the API"):
+        st.json(dict(payload), expanded=True)
 
 
 def render_sidebar() -> str:
@@ -415,7 +640,8 @@ def render_sidebar() -> str:
             "Section", options=PAGES, key=NAV_KEY, label_visibility="collapsed"
         )
         st.divider()
-        st.caption("Credit Risk ML service · Sprint 2")
+        st.caption("Credit Risk ML service · Sprint 3")
+        st.caption(f"API: {API_BASE_URL}")
     return selected if selected is not None else PAGE_SCORING
 
 
@@ -424,8 +650,8 @@ def render_history_page() -> None:
     st.title(PAGE_HISTORY)
     st.caption(f"The {HISTORY_LIMIT} most recent applications, newest first.")
     st.info(
-        "Demo data: this table is filled with synthetic records. "
-        "Real applications from the database will appear once the API is connected."
+        "Demo data: this table is filled with synthetic records. Real applications "
+        "will appear once the API exposes a history endpoint."
     )
 
     history: pd.DataFrame = load_scoring_history()
@@ -460,7 +686,7 @@ def render_history_page() -> None:
 
 
 def render_scoring_page() -> None:
-    """Render the loan application form, then validate and preview the payload."""
+    """Render the loan form; on submit validate, score via the API, show the result."""
     render_header()
 
     with st.form(key=FORM_KEY):
@@ -482,9 +708,18 @@ def render_scoring_page() -> None:
     payload: dict[str, FeatureValue] = build_payload(financial_inputs, profile_inputs)
     validation: ValidationResult = validate_inputs(payload)
     render_validation(validation)
+    if not validation.is_valid:
+        return  # never send a request the API would reject anyway
 
-    if validation.is_valid:
-        render_payload(payload)
+    try:
+        with st.spinner("Scoring the application..."):
+            result: ScoringResult = request_score(payload)
+    except ScoringAPIError as error:
+        render_api_error(error)
+    else:
+        render_scoring_result(result, RISK_THRESHOLD)
+
+    render_payload(payload)
 
 
 def main() -> None:
