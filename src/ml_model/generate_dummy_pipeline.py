@@ -1,7 +1,7 @@
-"""Throwaway pipeline generator — unblocks Card 4 while the real
-scikit-learn preprocessing pipeline is being fixed.
+"""Throwaway pipeline generator for plumbing and smoke tests.
 
-Trains a trivial DummyClassifier (ignores feature values entirely, predicts
+Unblocks Card 4 while the real scikit-learn preprocessing pipeline is being
+fixed. Trains a trivial DummyClassifier (ignores feature values entirely, predicts
 from the class prior) wrapped in a Pipeline, and serializes it to
 `scoring_pipeline.pkl` so CreditScoringService has something to load.
 

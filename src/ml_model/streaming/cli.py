@@ -27,6 +27,7 @@ def _positive_int(text: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser for the streaming CLI."""
     parser = argparse.ArgumentParser(
         prog="python -m src.ml_model.streaming.cli",
         description="Stream a JSON Lines file of accepted loans without loading it.",
@@ -100,6 +101,14 @@ def _preview(path: Path, count: int) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the streaming CLI in ``--stats`` or ``--preview`` mode.
+
+    Args:
+        argv: Command-line arguments; ``None`` reads ``sys.argv``.
+
+    Returns:
+        Process exit code: 0 on success, 2 if the input file is missing.
+    """
     args = build_parser().parse_args(argv)
     path: Path = args.path
     if not path.is_file():

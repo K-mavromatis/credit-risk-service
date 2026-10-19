@@ -25,4 +25,4 @@ requests  # HTTP client: Streamlit UI -> FastAPI
 pytest
 pytest-cov
 httpx  # required by fastapi.testclient.TestClient
-ruff
+ruff==0.16.8 # linter + formatter; same version as .pre-commit-config.yaml

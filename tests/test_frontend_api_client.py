@@ -191,7 +191,7 @@ def test_server_error_shows_api_detail(
 def test_error_without_json_body_is_still_reported(fake_post: PostRecorder) -> None:
     fake_post.response = make_response(502, raw_text="Bad Gateway")
 
-    with pytest.raises(ScoringAPIError, match="Unexpected response.*HTTP 502"):
+    with pytest.raises(ScoringAPIError, match=r"Unexpected response.*HTTP 502"):
         request_score(VALID_PAYLOAD)
 
 

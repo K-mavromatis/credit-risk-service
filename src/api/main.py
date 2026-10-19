@@ -70,6 +70,12 @@ def parse_cors_origins(raw: str | None) -> list[str]:
     ``None`` or a blank string falls back to ``DEFAULT_CORS_ORIGINS``. Trailing
     slashes are stripped, because an origin never has one and
     ``"http://localhost:8501/"`` would silently never match.
+
+    Args:
+        raw: Raw ``CORS_ORIGINS`` environment value, or None if unset.
+
+    Returns:
+        The list of allowed origins without trailing slashes.
     """
     if raw is None or not raw.strip():
         return list(DEFAULT_CORS_ORIGINS)
@@ -95,6 +101,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     and the application refuses to start. That is deliberate: a scoring
     service without a model should fail loudly at deploy time, not answer
     every request with an error.
+
+    Args:
+        app: The FastAPI application whose ``state`` holds the predictor.
+
+    Yields:
+        Control to FastAPI while the application is serving requests.
     """
     logger.info("Loading the credit scoring pipeline...")
     app.state.predictor = CreditRiskPredictor()
@@ -140,6 +152,15 @@ def get_predictor(request: Request) -> CreditRiskPredictor:
     Raises ``503`` if the model is not loaded, which only happens when the app
     runs without its lifespan (for example ``TestClient(app)`` used outside a
     ``with`` block and without a dependency override).
+
+    Args:
+        request: The incoming request, used to reach ``app.state``.
+
+    Returns:
+        The ``CreditRiskPredictor`` loaded at startup.
+
+    Raises:
+        HTTPException: 503 if the model is not loaded.
     """
     predictor: CreditRiskPredictor | None = getattr(
         request.app.state, "predictor", None
@@ -182,7 +203,18 @@ def predict(
     Declared as a plain ``def`` (not ``async def``) on purpose: sklearn
     inference and the psycopg2 driver are both blocking, and FastAPI runs sync
     endpoints in a thread pool, so they do not block the event loop.
-    """
+    \f
+    Args:
+        application: Validated request body with the 13 model features.
+        db: Database session for this request.
+        predictor: The scoring model loaded at startup.
+
+    Returns:
+        The stored application with its ``id``, score and ``created_at``.
+
+    Raises:
+        HTTPException: 500 if the model fails, 503 if the row cannot be saved.
+    """  # noqa: D301 - "\f" hides the sections below it from Swagger UI
     features = application.model_dump()
 
     # 1. Model inference -----------------------------------------------------------

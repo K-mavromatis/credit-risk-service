@@ -19,8 +19,8 @@ DEFAULT_PIPELINE_PATH: Final[Path] = (
 
 
 class CreditRiskPredictor:
-    """Loads a trained credit-scoring pipeline and serves
-    default-probability predictions.
+    """Load a trained credit-scoring pipeline and serve default probabilities.
+
     Attributes:
         pipeline: The deserialized scikit-learn Pipeline used for inference.
     """
@@ -47,7 +47,7 @@ class CreditRiskPredictor:
 
         try:
             loaded_object: Any = joblib.load(resolved_path)
-        except Exception as exc:  # noqa: BLE001 - surface any deserialization failure
+        except Exception as exc:  # surface any deserialization failure
             raise RuntimeError(
                 f"Failed to deserialize pipeline from '{resolved_path}': {exc}"
             ) from exc
@@ -82,7 +82,7 @@ class CreditRiskPredictor:
 
         try:
             probabilities = self.pipeline.predict_proba(record_frame)
-        except Exception as exc:  # noqa: BLE001 - wrap any pipeline-internal failure
+        except Exception as exc:  # wrap any pipeline-internal failure
             raise RuntimeError(f"Pipeline inference failed: {exc}") from exc
 
         # Locate the "default" (class 1) column defensively instead of

@@ -146,6 +146,7 @@ class ValidationResult:
 
     @property
     def is_valid(self) -> bool:
+        """True when the payload has no blocking errors (warnings are allowed)."""
         return not self.errors
 
 
@@ -243,6 +244,12 @@ class ScoringAPIError(Exception):
     """
 
     def __init__(self, message: str, details: Sequence[str] = ()) -> None:
+        """Create the error.
+
+        Args:
+            message: Short, user-facing description of the failure.
+            details: Optional extra lines, e.g. field errors of a 422 response.
+        """
         super().__init__(message)
         self.details: tuple[str, ...] = tuple(details)
 

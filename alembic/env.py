@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
+from alembic import context
+from alembic.config import Config
 from sqlalchemy import MetaData, create_engine, pool
 from sqlalchemy.engine import Connection, Engine
 
-from alembic import context
-from alembic.config import Config
 from src.db.database import settings
 
 # Import Base from *models*, not from database: importing models.py registers

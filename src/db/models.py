@@ -105,7 +105,11 @@ class CreditApplication(Base):
     )
 
     def to_features(self) -> dict[str, FeatureValue]:
-        """Return the raw model inputs, ready for ``CreditRiskPredictor``."""
+        """Return the raw model inputs, ready for ``CreditRiskPredictor``.
+
+        Returns:
+            Mapping of the 13 ``MODEL_FEATURES`` names to this row's values.
+        """
         return {name: getattr(self, name) for name in MODEL_FEATURES}
 
     def __repr__(self) -> str:
