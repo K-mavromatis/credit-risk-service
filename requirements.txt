@@ -1,8 +1,8 @@
 # --- ML & Data Science ---
 pandas
 numpy
-scikit-learn
-lightgbm  # estimator inside scoring_pipeline.pkl
+scikit-learn==1.9.0  # must match the version scoring_pipeline.pkl was pickled with
+lightgbm==4.7.0  # estimator inside scoring_pipeline.pkl; pinned to the training version
 joblib
 
 # --- API & Backend ---
