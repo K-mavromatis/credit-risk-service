@@ -19,9 +19,12 @@ from frontend import app
 from frontend.app import (
     DEFAULT_RISK_THRESHOLD,
     FEATURE_ORDER,
+    SERVICE_UNAVAILABLE_MESSAGE,
     FeatureValue,
     ScoringAPIError,
+    ScoringResponseError,
     ScoringResult,
+    ScoringServiceUnavailableError,
     build_payload,
     format_validation_errors,
     is_high_risk,
@@ -122,22 +125,24 @@ def test_request_score_returns_parsed_result(fake_post: PostRecorder) -> None:
 
 # --- Network failures -----------------------------------------------------------
 @pytest.mark.parametrize(
-    ("error", "expected_message"),
+    ("error", "expected_detail"),
     [
         (requests.exceptions.ConnectionError("refused"), "Cannot connect"),
         (requests.exceptions.ConnectTimeout("slow connect"), "Cannot connect"),
         (requests.exceptions.ReadTimeout("slow model"), "did not answer"),
-        (requests.exceptions.InvalidURL("bad url"), "request to the scoring API"),
+        (requests.exceptions.Timeout("generic timeout"), "did not answer"),
     ],
 )
-def test_network_errors_become_scoring_api_error(
-    fake_post: PostRecorder, error: Exception, expected_message: str
+def test_unreachable_backend_raises_service_unavailable(
+    fake_post: PostRecorder, error: Exception, expected_detail: str
 ) -> None:
     fake_post.error = error
 
-    with pytest.raises(ScoringAPIError, match=expected_message) as exc_info:
+    with pytest.raises(ScoringServiceUnavailableError) as exc_info:
         request_score(VALID_PAYLOAD)
 
+    assert str(exc_info.value) == SERVICE_UNAVAILABLE_MESSAGE
+    assert any(expected_detail in line for line in exc_info.value.details)
     assert exc_info.value.__cause__ is error
 
 
@@ -146,10 +151,24 @@ def test_connection_error_tells_how_to_start_the_backend(
 ) -> None:
     fake_post.error = requests.exceptions.ConnectionError("refused")
 
-    with pytest.raises(ScoringAPIError) as exc_info:
+    with pytest.raises(ScoringServiceUnavailableError) as exc_info:
         request_score(VALID_PAYLOAD)
 
     assert any("uvicorn src.api.main:app" in line for line in exc_info.value.details)
+
+
+def test_other_request_exception_is_a_generic_api_error(
+    fake_post: PostRecorder,
+) -> None:
+    error = requests.exceptions.InvalidURL("bad url")
+    fake_post.error = error
+
+    with pytest.raises(ScoringAPIError, match="request to the scoring API") as exc_info:
+        request_score(VALID_PAYLOAD)
+
+    assert not isinstance(exc_info.value, ScoringServiceUnavailableError)
+    assert not isinstance(exc_info.value, ScoringResponseError)
+    assert exc_info.value.__cause__ is error
 
 
 # --- Error responses ------------------------------------------------------------
@@ -164,9 +183,10 @@ def test_422_lists_field_errors(fake_post: PostRecorder) -> None:
     ]
     fake_post.response = make_response(422, {"detail": detail})
 
-    with pytest.raises(ScoringAPIError, match="422") as exc_info:
+    with pytest.raises(ScoringResponseError, match="422") as exc_info:
         request_score(VALID_PAYLOAD)
 
+    assert exc_info.value.status_code == 422
     assert exc_info.value.details == (
         "loan_amnt: Input should be greater than or equal to 500",
     )
@@ -180,9 +200,10 @@ def test_server_error_shows_api_detail(
         status_code, {"detail": "The scoring model is not loaded."}
     )
 
-    with pytest.raises(ScoringAPIError) as exc_info:
+    with pytest.raises(ScoringResponseError) as exc_info:
         request_score(VALID_PAYLOAD)
 
+    assert exc_info.value.status_code == status_code
     message = str(exc_info.value)
     assert f"HTTP {status_code}" in message
     assert "The scoring model is not loaded." in message
@@ -191,7 +212,7 @@ def test_server_error_shows_api_detail(
 def test_error_without_json_body_is_still_reported(fake_post: PostRecorder) -> None:
     fake_post.response = make_response(502, raw_text="Bad Gateway")
 
-    with pytest.raises(ScoringAPIError, match=r"Unexpected response.*HTTP 502"):
+    with pytest.raises(ScoringResponseError, match=r"Unexpected response.*HTTP 502"):
         request_score(VALID_PAYLOAD)
 
 
@@ -199,7 +220,7 @@ def test_error_without_json_body_is_still_reported(fake_post: PostRecorder) -> N
 def test_non_json_success_body_raises(fake_post: PostRecorder) -> None:
     fake_post.response = make_response(200, raw_text="<html>proxy page</html>")
 
-    with pytest.raises(ScoringAPIError, match="non-JSON"):
+    with pytest.raises(ScoringResponseError, match="non-JSON"):
         request_score(VALID_PAYLOAD)
 
 
@@ -215,7 +236,7 @@ def test_non_json_success_body_raises(fake_post: PostRecorder) -> None:
 def test_invalid_success_body_raises(fake_post: PostRecorder, body: object) -> None:
     fake_post.response = make_response(200, body)
 
-    with pytest.raises(ScoringAPIError, match="valid score"):
+    with pytest.raises(ScoringResponseError, match="valid score"):
         request_score(VALID_PAYLOAD)
 
 
