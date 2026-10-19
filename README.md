@@ -15,7 +15,7 @@ The target architecture is a RESTful API backed by PostgreSQL, fronted by a Stre
 
 | Layer | Technology | Responsibility | Status |
 | :--- | :--- | :--- | :--- |
-| **Interface** | Streamlit | Loan application form with client-side validation. | Form implemented; not wired to a backend yet. |
+| **Interface** | Streamlit | Loan application form with client-side validation; scores via `POST /predict`. | Form calls the API and shows the decision; history page still uses demo data. |
 | **Routing / API** | FastAPI, Pydantic | REST endpoints, request/response validation. | Pydantic schemas and `POST /predict` implemented; `/predict` returns a stub probability (model not wired in yet). |
 | **Domain / ML** | Scikit-Learn, LightGBM, Pandas | Feature engineering and the default-probability model. | Notebook-trained pipeline; inference wrapper implemented. |
 | **Storage** | PostgreSQL, SQLAlchemy, Alembic | ORM model and schema migration for scored applications. | Model and migration implemented; no code writes to it yet. |
@@ -90,7 +90,7 @@ What is real right now, so this README does not promise more than the code does:
   No out-of-time validation and no probability calibration have been done yet — treat the model as a baseline, not a production decision engine.
 - **`scoring_pipeline.pkl` is git-ignored and not reproducible from a clean clone**: there is no `train.py`, training only happens by running `03_model_benchmarking.ipynb`, and `lightgbm` is missing from the dependency files. See [REFACTORING.md](REFACTORING.md) for the full list of known gaps.
 - **The database and the model are not connected to anything.** `CreditApplication` (the ORM model) and `CreditRiskPredictor` (the inference wrapper) both exist and are tested in isolation, but there is no API endpoint and no `crud.py` that calls one from the other.
-- **The Streamlit form stops at validation.** `frontend/app.py` builds and validates a request payload and shows it as JSON; it does not call any backend (there is not one yet).
+- **The Streamlit form calls the API.** `frontend/app.py` validates the payload, sends it to `POST /predict` and shows the probability of default with a green (approved) or red (high risk) banner. The decision threshold (`RISK_THRESHOLD`, default `0.5`) is a placeholder until a tuned one is chosen. The history page still shows synthetic data (no history endpoint yet).
 
 ## Quick Start (Local Development)
 
@@ -125,10 +125,11 @@ Alternatively, for plumbing/smoke-testing only (never for real predictions):
 python -m src.ml_model.generate_dummy_pipeline
 ```
 
-**5. Run the Streamlit form:**
+**5. Run the Streamlit form** (start the API from step 6 first, or the form shows a connection error):
 ```bash
 streamlit run frontend/app.py
 ```
+The UI calls `API_BASE_URL` (default `http://localhost:8000`, set it in `.env`).
 
 **6. Run the FastAPI server:**
 ```bash

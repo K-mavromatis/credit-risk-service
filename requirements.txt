@@ -19,6 +19,7 @@ python-dotenv
 
 # --- Frontend ---
 streamlit==1.63.0
+requests  # HTTP client: Streamlit UI -> FastAPI
 
 # --- Testing & Code Quality ---
 pytest
