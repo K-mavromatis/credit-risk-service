@@ -178,7 +178,8 @@ def test_request_is_immutable() -> None:
 
 
 # --- ApplicationResponse -----------------------------------------------------------
-def test_response_is_built_from_orm_object() -> None:
+def test_response_is_built_from_orm_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RISK_THRESHOLD", "0.5")  # a local .env must not change it
     created_at = datetime(2026, 10, 19, 9, 15, tzinfo=timezone.utc)
     row = CreditApplication(
         **_payload(), id=42, default_probability=0.137, created_at=created_at
@@ -189,9 +190,11 @@ def test_response_is_built_from_orm_object() -> None:
     assert response.id == 42
     assert response.default_probability == pytest.approx(0.137)
     assert response.created_at == created_at
-    assert response.model_dump(exclude={"id", "default_probability", "created_at"}) == (
-        row.to_features()
+    assert response.decision == "approved"  # computed: 0.137 < 0.5, not stored
+    features = response.model_dump(
+        exclude={"id", "default_probability", "created_at", "decision"}
     )
+    assert features == row.to_features()
 
 
 def test_response_rejects_probability_outside_unit_interval() -> None:

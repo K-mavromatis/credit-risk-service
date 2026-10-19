@@ -7,7 +7,11 @@
    of default for the 13 raw features.
 3. ``crud.create_application`` (Sprint 2) stores the features and the score in
    PostgreSQL; the database assigns ``id`` and ``created_at``.
-4. The stored row is returned as ``ApplicationResponse``.
+4. The stored row is returned as ``ApplicationResponse``, together with the
+   computed ``decision`` (``approved`` / ``rejected``, Sprint 4 Card 3).
+
+``GET /health`` is a liveness check for monitoring and container probes: it
+answers ``200`` without touching the model or the database.
 
 The model is loaded in the ``lifespan`` handler, so ``scoring_pipeline.pkl`` is
 read from disk exactly once per process, not once per request. The endpoint
@@ -40,12 +44,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.api.schemas import ApplicationCreate, ApplicationResponse
+from src.api.schemas import (
+    ApplicationCreate,
+    ApplicationResponse,
+    HealthResponse,
+    get_risk_threshold,
+)
 from src.db import crud
 from src.db.database import engine, get_db
 from src.ml_model.service import CreditRiskPredictor
 
-API_VERSION: Final[str] = "0.3.0"
+API_VERSION: Final[str] = "0.4.0"
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -102,12 +111,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service without a model should fail loudly at deploy time, not answer
     every request with an error.
 
+    An invalid ``RISK_THRESHOLD`` also stops startup, for the same reason.
+
     Args:
         app: The FastAPI application whose ``state`` holds the predictor.
 
     Yields:
         Control to FastAPI while the application is serving requests.
+
+    Raises:
+        ValueError: If ``RISK_THRESHOLD`` is set but not a number in (0, 1).
     """
+    logger.info("Decision threshold: %.3f", get_risk_threshold())
     logger.info("Loading the credit scoring pipeline...")
     app.state.predictor = CreditRiskPredictor()
     logger.info("Credit scoring pipeline loaded.")
@@ -131,7 +146,11 @@ app = FastAPI(
         {
             "name": "scoring",
             "description": "Score a loan application and store the result.",
-        }
+        },
+        {
+            "name": "monitoring",
+            "description": "Service health checks.",
+        },
     ],
 )
 
@@ -177,13 +196,36 @@ DbSession = Annotated[Session, Depends(get_db)]
 Predictor = Annotated[CreditRiskPredictor, Depends(get_predictor)]
 
 
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["monitoring"],
+    summary="Liveness check",
+)
+def health(request: Request) -> HealthResponse:
+    """Report that the service is up, and whether the model is loaded.
+
+    Liveness only: no database query and no inference, so the check is cheap
+    enough for a load balancer or Kubernetes probe to call every few seconds.
+
+    Args:
+        request: The incoming request, used to reach ``app.state``.
+
+    Returns:
+        ``status="ok"``, the API version and the model-loaded flag.
+    """
+    model_loaded: bool = getattr(request.app.state, "predictor", None) is not None
+    return HealthResponse(version=API_VERSION, model_loaded=model_loaded)
+
+
 @app.post(
     "/predict",
     response_model=ApplicationResponse,
     status_code=status.HTTP_200_OK,
     tags=["scoring"],
     summary="Score one loan application and store the result",
-    response_description="The stored application with its default probability",
+    response_description="The stored application, its default probability and decision",
     responses={
         500: {"description": "The model failed to score the application"},
         503: {"description": "The model is not loaded or the database is down"},
@@ -210,7 +252,7 @@ def predict(
         predictor: The scoring model loaded at startup.
 
     Returns:
-        The stored application with its ``id``, score and ``created_at``.
+        The stored application with its ``id``, score, ``decision`` and ``created_at``.
 
     Raises:
         HTTPException: 500 if the model fails, 503 if the row cannot be saved.

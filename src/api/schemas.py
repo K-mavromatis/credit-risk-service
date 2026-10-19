@@ -8,8 +8,11 @@ wrong type, an unknown category or an out-of-range value becomes a clear
 Exposes:
     ApplicationBase      -- the 13 raw LendingClub features (shared fields)
     ApplicationCreate    -- POST request body: strict input validation
-    ApplicationResponse  -- response body: features + score + id + created_at,
-                            readable straight from a ``CreditApplication`` row
+    ApplicationResponse  -- response body: features + score + id + created_at
+                            + ``decision``, readable straight from a
+                            ``CreditApplication`` row
+    HealthResponse       -- body of ``GET /health`` (liveness check)
+    decide               -- the approve / reject rule behind ``decision``
 
 Field names match ``src.db.models.MODEL_FEATURES`` and the ``CreditApplication``
 columns exactly, so data moves between the API, the model and the database
@@ -19,10 +22,11 @@ data levels from notebook 02); ``tests/test_api_schemas.py`` checks both.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 # --- Category levels the model was trained on ------------------------------------
 # Same values and order (by frequency) as the *_OPTIONS tuples in frontend/app.py.
@@ -50,6 +54,64 @@ Purpose: TypeAlias = Literal[
 # --- Business rules (same as frontend/app.py) --------------------------------------
 MIN_LOAN_AMOUNT: float = 500.0
 MAX_LOAN_AMOUNT: float = 40_000.0
+
+# --- Credit decision (Sprint 4, Card 3) --------------------------------------------
+# Same rule and the same RISK_THRESHOLD setting as ``is_high_risk`` in
+# frontend/app.py, so the API decision and the UI banner always agree.
+# 0.5 is a placeholder until a tuned threshold is chosen in notebook 03; changing
+# it needs evaluation metrics (see CONTRIBUTING.md).
+Decision: TypeAlias = Literal["approved", "rejected"]
+DEFAULT_RISK_THRESHOLD: Final[float] = 0.5
+
+
+def parse_risk_threshold(raw: str | None) -> float:
+    """Parse a ``RISK_THRESHOLD`` value. ``None`` or blank gives the default.
+
+    Args:
+        raw: Raw environment value, or None if unset.
+
+    Returns:
+        The threshold, strictly between 0 and 1.
+
+    Raises:
+        ValueError: If the value is not a number strictly between 0 and 1.
+    """
+    if raw is None or not raw.strip():
+        return DEFAULT_RISK_THRESHOLD
+    try:
+        value: float = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"RISK_THRESHOLD must be a number, got {raw!r}.") from exc
+    if not 0.0 < value < 1.0:  # also rejects NaN
+        raise ValueError(f"RISK_THRESHOLD must be between 0 and 1, got {value}.")
+    return value
+
+
+def get_risk_threshold() -> float:
+    """Return the current decision threshold from the ``RISK_THRESHOLD`` setting.
+
+    Read at call time, not at import time: this module is imported before
+    ``src.db.database`` loads ``.env``, so an import-time read would miss it.
+    The API calls it once at startup so a bad value stops the service early.
+    """
+    return parse_risk_threshold(os.getenv("RISK_THRESHOLD"))
+
+
+def decide(default_probability: float, threshold: float | None = None) -> Decision:
+    """Turn a probability of default into a credit decision.
+
+    Args:
+        default_probability: Model output in [0, 1].
+        threshold: Probability at or above which the application is rejected.
+            ``None`` uses ``get_risk_threshold()``.
+
+    Returns:
+        ``"rejected"`` if the probability is at or above the threshold,
+        otherwise ``"approved"``.
+    """
+    limit: float = get_risk_threshold() if threshold is None else threshold
+    return "rejected" if default_probability >= limit else "approved"
+
 
 _EXAMPLE_APPLICATION: dict[str, float | int | str | None] = {
     "loan_amnt": 10_000.0,
@@ -134,6 +196,10 @@ class ApplicationResponse(ApplicationBase):
     ``from_attributes=True`` lets FastAPI build it straight from the ORM object
     returned by ``crud.create_application``:
     ``ApplicationResponse.model_validate(credit_application)``.
+
+    ``decision`` is a computed field: it is derived from ``default_probability``
+    on output and is not stored in the database, so it never appears in
+    ``model_fields`` and the ORM row needs no extra column.
     """
 
     model_config = ConfigDict(
@@ -144,6 +210,7 @@ class ApplicationResponse(ApplicationBase):
                     **_EXAMPLE_APPLICATION,
                     "id": 42,
                     "default_probability": 0.137,
+                    "decision": "approved",
                     "created_at": "2026-10-19T09:15:00Z",
                 }
             ]
@@ -155,3 +222,30 @@ class ApplicationResponse(ApplicationBase):
         ge=0, le=1, description="Predicted probability of default, in [0, 1]"
     )
     created_at: datetime = Field(description="When the application was received")
+
+    @computed_field(  # type: ignore[prop-decorator]
+        description=(
+            "Credit decision: 'rejected' if default_probability is at or above "
+            "the RISK_THRESHOLD setting (default 0.5), otherwise 'approved'"
+        )
+    )
+    @property
+    def decision(self) -> Decision:
+        """Approve or reject the application based on its default probability."""
+        return decide(self.default_probability)
+
+
+class HealthResponse(BaseModel):
+    """Body of ``GET /health``: the service process is up and answering.
+
+    A liveness check only: it touches neither the database nor the model, so
+    it stays fast and cannot fail because a dependency is slow.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["ok"] = Field(default="ok", description="Always 'ok' when up")
+    version: str = Field(description="API version")
+    model_loaded: bool = Field(
+        description="Whether the scoring pipeline is loaded in this process"
+    )
