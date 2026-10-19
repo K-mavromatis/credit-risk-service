@@ -1,65 +1,94 @@
 # Credit Risk Service
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-Framework-009688)
+![Status](https://img.shields.io/badge/Status-In%20Development-yellow)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791)
-![Scikit-Learn](https://img.shields.io/badge/Machine%20Learning-Scikit--Learn-F7931E)
+![Scikit-Learn](https://img.shields.io/badge/Machine%20Learning-LightGBM%20%2F%20Scikit--Learn-F7931E)
 
 ## Project Overview
 
 This project is an end-to-end Machine Learning microservice designed to assess borrower credit default risk. Built around the [Lending Club Dataset](https://www.kaggle.com/datasets/wordsforthewise/lending-club), the system evaluates client financial profiles (e.g., income, debt-to-income ratio, employment length) to predict the probability of loan default.
 
-Unlike a standard analytical script, this repository implements a production-ready pipeline: an isolated ML domain, a RESTful API, relational database storage, and an interactive inference dashboard.
+The target architecture is a RESTful API backed by PostgreSQL, fronted by a Streamlit dashboard, with an isolated ML domain for feature preparation and inference. **The API layer does not exist yet** — see [Current status](#current-status) below for what is actually implemented versus planned.
+
 ## System Architecture
 
-| Layer | Technology | Responsibility |
-| :--- | :--- | :--- |
-| **Interface** | Streamlit | Interactive web UI for submitting loan applications. |
-| **Routing / API** | FastAPI, Pydantic | REST API endpoints, strict data validation, and JSON responses. |
-| **Domain / ML** | Scikit-Learn, Pandas | Feature engineering pipelines and the Random Forest predictive model. |
-| **Storage** | PostgreSQL, SQLAlchemy | Persistent storage of application history, client features, and scoring results. |
-| **Infrastructure** | Docker, Pytest, Git | Containerization, unit testing (>=70% coverage), and CI/CD pipelines. |
+| Layer | Technology | Responsibility | Status |
+| :--- | :--- | :--- | :--- |
+| **Interface** | Streamlit | Loan application form with client-side validation. | Form implemented; not wired to a backend yet. |
+| **Routing / API** | FastAPI, Pydantic | REST endpoints, request/response validation. | Not implemented (`src/api/` is an empty package). |
+| **Domain / ML** | Scikit-Learn, LightGBM, Pandas | Feature engineering and the default-probability model. | Notebook-trained pipeline; inference wrapper implemented. |
+| **Storage** | PostgreSQL, SQLAlchemy, Alembic | ORM model and schema migration for scored applications. | Model and migration implemented; no code writes to it yet. |
+| **Batch ingestion** | Generators, Pydantic | Streams large LendingClub-style files without loading them fully into memory. | Implemented (`src/ml_model/streaming/`), see [PIPELINE.md](PIPELINE.md). |
+| **Infrastructure** | Docker, Pytest, Git, pre-commit | Containerization, tests, linting. | Pytest + ruff + pre-commit in place; no Docker/CI yet. |
 
 ## Tech Stack & Dependencies
 
-* **Data Processing & ML:** `pandas`, `numpy`, `scikit-learn`, `joblib`
-* **Backend & API:** `fastapi`, `uvicorn`, `pydantic`
+* **Data Processing & ML:** `pandas`, `numpy`, `scikit-learn`, `lightgbm`, `joblib`
+* **Backend & API (planned, not yet wired up):** `fastapi`, `uvicorn`, `pydantic`
 * **Database & ORM:** `sqlalchemy`, `alembic`, `psycopg2-binary`
-* **Testing & Quality:** `pytest`, `ruff`
+* **Testing & Quality:** `pytest`, `pytest-cov`, `ruff`, `mypy`, `pre-commit`
+
+> ⚠️ `lightgbm` is the library the saved scoring pipeline actually needs in order to unpickle (see [Current status](#current-status)), but it is **not yet listed** in `requirements.txt` / `pyproject.toml`. Install it manually (`pip install lightgbm`) until that gap is closed.
 
 ## Project Structure
 
 ```text
 credit-risk-service/
-├── frontend/                     # User interface layer
-│   └── app.py                    # Interactive Streamlit dashboard
-├── notebooks/                    # Research, EDA, and prototyping
-│   └── 01_data_preparation.ipynb # Data cleaning, filtering, and initial pipeline
-├── src/                          # Application source code (Python package)
-│   ├── api/                      # FastAPI web service layer
-│   │   ├── main.py               # Application entrypoint & route handlers
-│   │   └── schemas.py            # Pydantic data contracts (request/response validation)
-│   ├── db/                       # Relational database layer
-│   │   ├── crud.py               # Persistence queries (create, read application records)
-│   │   ├── database.py           # SQLAlchemy engine setup & session management
-│   │   └── models.py             # ORM schemas (PostgreSQL tables)
-│   └── ml_model/                 # Machine Learning pipeline & artifacts
-│       ├── data/                 # Local data storage (excluded from git)
-│       │   ├── interim/          # Intermediate transformed subsets
-│       │   ├── processed/        # Final training datasets (parquet/csv)
-│       │   └── raw/              # Immutable raw source data
-│       ├── rf_model.pkl          # Serialized Random Forest model artifact
-│       ├── service.py            # Inference class for loading model & scoring
-│       └── train.py              # Model training & feature engineering script
-├── tests/                        # Automated test suite
-│   ├── test_api.py               # REST API endpoint tests
-│   └── test_ml.py                # Predictive sanity & probability bounds tests
-├── .env                          # Local environment variables (DB credentials, secrets)
-├── .gitignore                    # Git ignore rules (caches, data, venv, secrets)
-├── pyproject.toml                # Project metadata, dependencies, Ruff & Pytest configs
-├── README.md                     # Project overview and run documentation
-└── requirements.txt              # Pinned production & development dependencies
+├── frontend/
+│   └── app.py                        # Streamlit loan application form (standalone, no API call yet)
+├── notebooks/                        # Research notebooks — the only place the model is currently trained
+│   ├── 01_data_preparation.ipynb     # Feature whitelist, target definition, leakage-safe train/test split
+│   ├── 02_exploratory_data_analysis.ipynb
+│   ├── 03_model_benchmarking.ipynb   # Trains LogisticRegression / RandomForest / LightGBM, saves the best one
+│   └── figures/roc_curves_benchmark.png
+├── alembic/                          # Schema migrations
+│   └── versions/1b4951074b27_init_tables.py
+├── scripts/
+│   ├── make_dataset.py               # Builds the streaming-pipeline benchmark fixture
+│   └── compare.py                    # Lazy generator pipeline vs. intermediate-lists benchmark
+├── src/
+│   ├── api/                          # EMPTY — FastAPI routes and schemas are not implemented yet
+│   ├── db/
+│   │   ├── database.py               # Engine, SessionLocal, declarative Base, get_db() dependency
+│   │   └── models.py                 # CreditApplication ORM model (mirrors the model's 13 features)
+│   │                                  # No crud.py yet — nothing in the codebase writes to the table
+│   └── ml_model/
+│       ├── data/                      # Local datasets (git-ignored): raw/, interim/, processed/
+│       ├── scoring_pipeline.pkl       # Serialized sklearn Pipeline (ColumnTransformer + LightGBM); git-ignored
+│       ├── service.py                 # CreditRiskPredictor: loads the pipeline, exposes predict_proba()
+│       ├── preprocessing.py           # PercentileClipper transformer (defined, not currently used anywhere)
+│       ├── generate_dummy_pipeline.py # Throwaway DummyClassifier stand-in; feature list is stale (15 cols)
+│       └── streaming/                 # Generator-based ingestion pipeline for large raw files, see PIPELINE.md
+├── tests/
+│   ├── conftest.py
+│   ├── test_db_models.py             # ORM schema + constraint tests (SQLite, no real DB needed)
+│   ├── test_ml_service.py            # Smoke script only — no test_* functions, pytest collects 0 from it
+│   └── test_pipeline.py              # Streaming pipeline tests
+├── .env.example
+├── pyproject.toml
+├── requirements.txt
+├── PIPELINE.md                       # Deep dive on the streaming/batch ingestion pipeline
+├── CONTRIBUTING.md
+└── REFACTORING.md                    # Commit-by-commit change log and known discrepancies
 ```
+
+## Current status
+
+What is real right now, so this README does not promise more than the code does:
+
+- **Model:** three candidates were benchmarked on a stratified, leakage-safe 80/20 split (1,345,350 resolved loans, `notebooks/03_model_benchmarking.ipynb`). **LightGBM won** and is the one serialized to `scoring_pipeline.pkl` — not Random Forest.
+
+  | Model | ROC-AUC | PR-AUC | F1 |
+  |---|---:|---:|---:|
+  | LightGBM (saved) | 0.699 | 0.367 | 0.417 |
+  | Random Forest | 0.694 | 0.360 | 0.412 |
+  | Logistic Regression | 0.687 | 0.352 | 0.408 |
+
+  No out-of-time validation and no probability calibration have been done yet — treat the model as a baseline, not a production decision engine.
+- **`scoring_pipeline.pkl` is git-ignored and not reproducible from a clean clone**: there is no `train.py`, training only happens by running `03_model_benchmarking.ipynb`, and `lightgbm` is missing from the dependency files. See [REFACTORING.md](REFACTORING.md) for the full list of known gaps.
+- **The database and the model are not connected to anything.** `CreditApplication` (the ORM model) and `CreditRiskPredictor` (the inference wrapper) both exist and are tested in isolation, but there is no API endpoint and no `crud.py` that calls one from the other.
+- **The Streamlit form stops at validation.** `frontend/app.py` builds and validates a request payload and shows it as JSON; it does not call any backend (there is not one yet).
 
 ## Quick Start (Local Development)
 
@@ -68,30 +97,54 @@ credit-risk-service/
 git clone https://github.com/K-mavromatis/credit-risk-service.git
 cd credit-risk-service
 pip install -r requirements.txt
+pip install lightgbm   # not yet in requirements.txt — needed to load scoring_pipeline.pkl
 ```
 
-**2. Configure Environment Variables:**
-Create a .env file in the root directory and add your database credentials:
+**2. Configure environment variables:**
+
+Copy `.env.example` to `.env` and fill in your local PostgreSQL credentials:
 ```bash
-DATABASE_URL=postgresql://user:password@localhost:5432/credit_risk_db
+cp .env.example .env
+# DATABASE_URL=postgresql+psycopg2://<user>:<password>@localhost:5432/credit_scoring_db
 ```
 
-**3. Run the API Server:**
-
+**3. Apply database migrations:**
 ```bash
-uvicorn api.main:app --reload
+alembic upgrade head
+```
+This creates the `credit_applications` table (see `src/db/models.py`). Nothing in the codebase inserts into it yet — the table exists ahead of the API that will use it.
+
+**4. Train / obtain the scoring pipeline:**
+
+There is no standalone training script. Run `notebooks/03_model_benchmarking.ipynb` top to bottom (it expects `notebooks/01_data_preparation.ipynb` and `02_exploratory_data_analysis.ipynb` to have produced `src/ml_model/data/processed/loans_train.parquet`, `loans_test.parquet` and `preprocessor.joblib` first). The notebook writes `src/ml_model/scoring_pipeline.pkl`.
+
+Alternatively, for plumbing/smoke-testing only (never for real predictions):
+```bash
+python -m src.ml_model.generate_dummy_pipeline
 ```
 
-*The interactive API documentation (Swagger) will be available at* `http://localhost:8000/docs.`
+**5. Run the Streamlit form:**
+```bash
+streamlit run frontend/app.py
+```
 
+**6. Run the FastAPI server:** not available yet — `src/api/` has no implementation.
 
-**Development Roadmap (Sprints):**
-- Sprint 1: Architecture initialization, basic EDA, and baseline ML model export.
-- Sprint 2: PostgreSQL integration, SQLAlchemy models, and Alembic migrations.
-- Sprint 3: FastAPI routing, Pydantic schemas, and Streamlit UI integration.
-- Sprint 4: Code quality, linting, and Pytest implementation.
-- Sprint 5: Docker containerization and final deployment.
+**7. Run the tests:**
+```bash
+python -m pytest -q
+python -m pytest -q --cov=src --cov=frontend --cov-report=term-missing
+```
 
+For the batch/streaming ingestion pipeline (large raw LendingClub files), see [PIPELINE.md](PIPELINE.md).
+
+## Development Roadmap (Sprints)
+
+- **Sprint 1 — done:** architecture initialization, EDA, baseline model export.
+- **Sprint 2 — done:** PostgreSQL integration, SQLAlchemy models (`CreditApplication`), Alembic migrations.
+- **Sprint 3 — in progress:** Streamlit loan application form done (validation only, no API call). FastAPI routing, Pydantic schemas, and the DB write path (`crud.py`) not started.
+- **Sprint 4 — partial:** ruff + pre-commit hooks and a pytest suite are in place; test coverage is below the 70% target (see [CONTRIBUTING.md](CONTRIBUTING.md#testing)), and `src/api/` and `frontend/app.py` have little to no test coverage yet.
+- **Sprint 5 — not started:** Docker containerization and CI/CD.
 
 ## Core Team
 
