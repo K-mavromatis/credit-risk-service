@@ -1,0 +1,115 @@
+# =============================================================================
+# Credit Risk Service - local orchestration (Sprint 5, Card 2)
+#
+#   db        PostgreSQL 15 + named volume, gated by a pg_isready healthcheck
+#   api       FastAPI scoring service: waits for a healthy db, runs Alembic
+#             migrations, then starts uvicorn          -> http://localhost:8000
+#   frontend  Streamlit UI, waits for a healthy api    -> http://localhost:8501
+#
+# All three run on one isolated bridge network and reach each other by service
+# name (db, api). Only the api and frontend ports are published to the host.
+#
+# Usage:    docker compose up --build
+# Secrets:  POSTGRES_PASSWORD (required), POSTGRES_USER, POSTGRES_DB are read
+#           from the git-ignored .env next to this file. See .env.example.
+# =============================================================================
+
+name: credit-risk-service
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set - add it to .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-credit_scoring_db}
+    volumes:
+      # Named volume: data survives `docker compose down` and image rebuilds.
+      - pgdata:/var/lib/postgresql/data
+    # No `ports:` on purpose - the database is reachable only inside
+    # credit-net. Debug with: docker compose exec db psql -U postgres
+    healthcheck:
+      # $$ defers expansion to the container's shell, so the probe always uses
+      # the same user/db the container was started with.
+      # -h 127.0.0.1 forces a TCP probe: on first start the image runs a
+      # temporary socket-only server for init scripts, and a socket probe
+      # would report "healthy" before the real server is up.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - credit-net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI scoring API (image from the root Dockerfile, Sprint 5 Card 1)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: credit-risk-api:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy   # start only after pg_isready succeeds
+    environment:
+      # Host is the service name `db`, not localhost. Real env vars take
+      # precedence over .env inside the app (load_dotenv does not override),
+      # and .env is excluded from the image by .dockerignore anyway.
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-credit_scoring_db}
+      DB_ECHO: ${DB_ECHO:-false}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      RISK_THRESHOLD: ${RISK_THRESHOLD:-0.5}
+    # Migrations first; uvicorn starts only if they succeed (&&).
+    # `exec` replaces the shell with uvicorn so it is PID 1 and receives
+    # SIGTERM from `docker compose stop` for a graceful shutdown.
+    command: >
+      sh -c "alembic upgrade head &&
+             exec uvicorn src.api.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      # Same GET /health probe as the Dockerfile, but with a faster interval
+      # so the frontend does not wait 30 s for the first check.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s   # migrations + loading scoring_pipeline.pkl
+    networks:
+      - credit-net
+
+  # ---------------------------------------------------------------------------
+  # Streamlit UI (image from frontend/Dockerfile)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: credit-risk-frontend:latest
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy   # UI comes up only when the API answers
+    environment:
+      # Streamlit calls the API server-side, so it uses the internal DNS name.
+      API_BASE_URL: http://api:8000
+      RISK_THRESHOLD: ${RISK_THRESHOLD:-0.5}
+    ports:
+      - "8501:8501"
+    networks:
+      - credit-net
+
+networks:
+  credit-net:
+    driver: bridge
+
+volumes:
+  pgdata:
