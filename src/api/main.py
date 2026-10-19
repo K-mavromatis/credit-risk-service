@@ -23,9 +23,7 @@ from typing import Final
 
 from fastapi import FastAPI, status
 
-# Relative import: works whether this module is loaded as ``src.api.main``
-# (tests, `uvicorn src.api.main:app`) or ``api.main`` (editable install).
-from .schemas import ApplicationCreate, ApplicationResponse
+from src.api.schemas import ApplicationCreate, ApplicationResponse
 
 API_VERSION: Final[str] = "0.1.0"
 
