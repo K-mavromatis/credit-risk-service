@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Generator, Iterator
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, Table, create_engine, func, select
@@ -252,3 +253,62 @@ def test_model_is_loaded_once_at_startup(
 def test_predict_is_in_openapi_schema(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
     assert "post" in paths["/predict"]
+
+
+# --- CORS (Sprint 3, Card 4) ---------------------------------------------------------
+STREAMLIT_ORIGIN: str = "http://localhost:8501"
+
+
+def _preflight(client: TestClient, origin: str) -> httpx.Response:
+    return client.options(
+        "/predict",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [STREAMLIT_ORIGIN, "http://127.0.0.1:8501", "http://localhost:3000"],
+)
+def test_cors_preflight_allows_local_origins(client: TestClient, origin: str) -> None:
+    response = _preflight(client, origin)
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_cors_preflight_rejects_foreign_origin(client: TestClient) -> None:
+    response = _preflight(client, "https://evil.example.com")
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_headers_on_actual_post(client: TestClient) -> None:
+    response = client.post(
+        "/predict", json=_payload(), headers={"Origin": STREAMLIT_ORIGIN}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == STREAMLIT_ORIGIN
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, ["http://localhost:8501", "http://127.0.0.1:8501"]),
+        ("  ", ["http://localhost:8501", "http://127.0.0.1:8501"]),
+        (
+            "http://a.com/, http://b.com:8501 ,",
+            ["http://a.com", "http://b.com:8501"],
+        ),
+    ],
+)
+def test_parse_cors_origins(raw: str | None, expected: list[str]) -> None:
+    assert main.parse_cors_origins(raw) == expected
