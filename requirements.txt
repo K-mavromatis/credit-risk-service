@@ -23,4 +23,5 @@ streamlit==1.63.0
 # --- Testing & Code Quality ---
 pytest
 pytest-cov
+httpx  # required by fastapi.testclient.TestClient
 ruff

@@ -16,7 +16,7 @@ The target architecture is a RESTful API backed by PostgreSQL, fronted by a Stre
 | Layer | Technology | Responsibility | Status |
 | :--- | :--- | :--- | :--- |
 | **Interface** | Streamlit | Loan application form with client-side validation. | Form implemented; not wired to a backend yet. |
-| **Routing / API** | FastAPI, Pydantic | REST endpoints, request/response validation. | Not implemented (`src/api/` is an empty package). |
+| **Routing / API** | FastAPI, Pydantic | REST endpoints, request/response validation. | Pydantic schemas and `POST /predict` implemented; `/predict` returns a stub probability (model not wired in yet). |
 | **Domain / ML** | Scikit-Learn, LightGBM, Pandas | Feature engineering and the default-probability model. | Notebook-trained pipeline; inference wrapper implemented. |
 | **Storage** | PostgreSQL, SQLAlchemy, Alembic | ORM model and schema migration for scored applications. | Model and migration implemented; no code writes to it yet. |
 | **Batch ingestion** | Generators, Pydantic | Streams large LendingClub-style files without loading them fully into memory. | Implemented (`src/ml_model/streaming/`), see [PIPELINE.md](PIPELINE.md). |
@@ -48,7 +48,9 @@ credit-risk-service/
 │   ├── make_dataset.py               # Builds the streaming-pipeline benchmark fixture
 │   └── compare.py                    # Lazy generator pipeline vs. intermediate-lists benchmark
 ├── src/
-│   ├── api/                          # EMPTY — FastAPI routes and schemas are not implemented yet
+│   ├── api/
+│   │   ├── schemas.py                # Pydantic v2 request/response contract
+│   │   └── main.py                   # FastAPI app + POST /predict (stub score for now)
 │   ├── db/
 │   │   ├── database.py               # Engine, SessionLocal, declarative Base, get_db() dependency
 │   │   └── models.py                 # CreditApplication ORM model (mirrors the model's 13 features)
@@ -128,7 +130,11 @@ python -m src.ml_model.generate_dummy_pipeline
 streamlit run frontend/app.py
 ```
 
-**6. Run the FastAPI server:** not available yet — `src/api/` has no implementation.
+**6. Run the FastAPI server:**
+```bash
+uvicorn src.api.main:app --reload
+```
+Interactive docs at http://127.0.0.1:8000/docs. `POST /predict` validates the request but currently returns a fixed placeholder probability (`0.5`) — model inference is not wired in yet.
 
 **7. Run the tests:**
 ```bash
